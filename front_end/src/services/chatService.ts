@@ -1,6 +1,6 @@
 // /Users/atishaymalik/Desktop/ungli/UNGLI/front_end/src/services/chatService.ts
 
-import { authService } from './authService'; // ⭐ Import authService
+// import { authService } from './authService'; // ⭐ REMOVED: No longer directly using authService.fetchWithAuth for chat endpoints
 
 // Determine the API base URL based on the environment.
 const API_BASE_URL = import.meta.env.PROD
@@ -53,20 +53,24 @@ export interface Chat {
 }
 
 class ChatService {
-  // ⭐ Use authService's centralized fetchWithAuth method
-  // This binds the method to authService's instance to ensure 'this' context is correct
-  private fetchWithAuth = authService.fetchWithAuth.bind(authService);
+  // ⭐ REMOVED: No longer binding fetchWithAuth from authService
+  // private fetchWithAuth = authService.fetchWithAuth.bind(authService);
 
   async getUserChats(): Promise<Chat[]> {
     try {
-      // ⭐ Use fetchWithAuth directly. It handles auth headers and 401 redirection.
-      const response = await this.fetchWithAuth(`${API_BASE_URL}/api/chats`, {
+      // ⭐ MODIFIED: Use plain fetch for bypassed endpoint
+      const response = await fetch(`${API_BASE_URL}/api/chats`, {
         method: 'GET',
+        headers: {
+          'Content-Type': 'application/json',
+        },
       });
 
-      // No need for handleUnauthorizedResponse here, fetchWithAuth already called it.
-      // If a 401 occurred, fetchWithAuth would have thrown "TokenExpired" and redirected.
-
+      if (!response.ok) {
+        const errorBody = await response.json();
+        throw new Error(errorBody.detail || 'Failed to fetch chats');
+      }
+      
       const result = await response.json(); // Expected: { success: true, chats: [...] }
       const chats = result.chats?.map((chat: any) => ({
         id: chat._id, // Map backend `_id` to frontend `id`
@@ -78,20 +82,25 @@ class ChatService {
       return chats;
     } catch (error) {
       console.error('Error fetching chats:', error);
-      // ⭐ Re-throw only if it's the "TokenExpired" error, otherwise let Chat.tsx handle general API errors
-      if (error instanceof Error && error.message === "TokenExpired") {
-        throw error; // This will trigger the Chat.tsx top-level auth guard/redirect if not already handled
-      }
-      return []; // Return empty array for non-auth errors
+      // ⭐ No need to check for "TokenExpired" here as we're not using authService.fetchWithAuth
+      return []; // Return empty array for any error
     }
   }
 
   async getChatMessages(chatId: string): Promise<ConversationTurn[]> {
     try {
-      // ⭐ Use fetchWithAuth directly
-      const response = await this.fetchWithAuth(`${API_BASE_URL}/api/chats/${chatId}/messages`, {
+      // ⭐ MODIFIED: Use plain fetch for bypassed endpoint
+      const response = await fetch(`${API_BASE_URL}/api/chats/${chatId}/messages`, {
         method: 'GET',
+        headers: {
+          'Content-Type': 'application/json',
+        },
       });
+
+      if (!response.ok) {
+        const errorBody = await response.json();
+        throw new Error(errorBody.detail || 'Failed to fetch messages');
+      }
 
       const result: TransformedChatMessagesResponse = await response.json();
 
@@ -103,23 +112,28 @@ class ChatService {
       }
     } catch (error) {
       console.error('Error fetching messages:', error);
-      // ⭐ Re-throw only if it's the "TokenExpired" error
-      if (error instanceof Error && error.message === "TokenExpired") {
-        throw error;
-      }
+      // ⭐ No need to check for "TokenExpired" here
       return [];
     }
   }
 
   async sendMessage(data: SendMessageRequest): Promise<SendMessageSuccessResponse> {
     try {
-      // ⭐ Use fetchWithAuth directly
-      const response = await this.fetchWithAuth(`${API_BASE_URL}/api/chats/${data.chatId}/messages`, {
+      // ⭐ MODIFIED: Use plain fetch for bypassed endpoint
+      const response = await fetch(`${API_BASE_URL}/api/chats/${data.chatId}/messages`, {
         method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+        },
         body: JSON.stringify({
           content: data.content,
         }),
       });
+
+      if (!response.ok) {
+        const errorBody = await response.json();
+        throw new Error(errorBody.detail || 'Failed to send message');
+      }
 
       const result: SendMessageSuccessResponse = await response.json();
       // ⭐ UPDATED: Check for 'result.message' instead of 'result.bot_message_instance'
@@ -132,10 +146,7 @@ class ChatService {
       }
     } catch (error) {
       console.error('Error sending message:', error);
-      // ⭐ Re-throw only if it's the "TokenExpired" error
-      if (error instanceof Error && error.message === "TokenExpired") {
-        throw error;
-      }
+      // ⭐ No need to check for "TokenExpired" here
       throw error; // Re-throw other errors for Chat.tsx to handle
     }
   }
@@ -146,7 +157,6 @@ class ChatService {
    */
   async createChat(title?: string | null): Promise<Chat | null> {
     try {
-      // No need for the manual token check here; authService.fetchWithAuth handles it.
       const requestBody: { type: string; title?: string } = {
         type: 'direct', // For 1-on-1 messaging
       };
@@ -154,11 +164,19 @@ class ChatService {
         requestBody.title = title.trim();
       }
 
-      // ⭐ Use fetchWithAuth directly
-      const response = await this.fetchWithAuth(`${API_BASE_URL}/api/chats`, {
+      // ⭐ MODIFIED: Use plain fetch for bypassed endpoint
+      const response = await fetch(`${API_BASE_URL}/api/chats`, {
         method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+        },
         body: JSON.stringify(requestBody),
       });
+
+      if (!response.ok) {
+        const errorBody = await response.json();
+        throw new Error(errorBody.detail || 'Failed to create chat');
+      }
 
       const result = await response.json();
       if (result && result.chats && result.chats.length > 0) {
@@ -176,12 +194,34 @@ class ChatService {
       }
     } catch (error) {
       console.error('Error creating chat:', error);
-      // ⭐ Re-throw only if it's the "TokenExpired" error
-      if (error instanceof Error && error.message === "TokenExpired") {
-        throw error;
-      }
+      // ⭐ No need to check for "TokenExpired" here
       return null; // Return null for other errors
     }
+  }
+
+  // Keep these as they were, they're already unauthenticated or don't rely on authService.fetchWithAuth
+  async initChatSession(): Promise<any> {
+      const response = await fetch(`${API_BASE_URL}/api/chat/init`);
+      if (!response.ok) {
+          const errorBody = await response.json();
+          throw new Error(errorBody.detail || `Failed to initialize chat: ${response.statusText}`);
+      }
+      return response.json();
+  }
+
+  async triggerSearchPipeline(): Promise<any> {
+      const response = await fetch(`${API_BASE_URL}/api/trigger_search_pipeline`, {
+          method: 'POST',
+          headers: {
+              'Content-Type': 'application/json',
+          },
+          // body: JSON.stringify({}) // Assuming no body is needed for this endpoint
+      });
+      if (!response.ok) {
+          const errorBody = await response.json();
+          throw new Error(errorBody.detail || `Failed to trigger search pipeline: ${response.statusText}`);
+      }
+      return response.json();
   }
 }
 

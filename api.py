@@ -53,6 +53,7 @@ def verify_token(token: str):
         return None
 
 # --- Authentication Dependency ---
+# This dependency is kept but will no longer be used by the bypassed endpoints
 async def get_current_user_id(authorization: str = Header(None)):
     if not authorization:
         raise HTTPException(status_code=401, detail="Authorization token is missing!")
@@ -151,8 +152,6 @@ from front_end_llm.pydantic_models import (
     Message as MessageModel,
     GoogleAuthRequest,FacebookAuthRequest,ConversationTurn,
     TransformedChatMessagesResponse
-    # --- NEW IMPORTS ---
-    
 )
 
 # --- Import LLM-related Utilities ---
@@ -179,7 +178,7 @@ from front_end_llm.prompts import SYSTEM_PROMPT, RETRY_PROMPT_SUFFIX, NEXT_QUEST
 async def health_check():
     return SuccessMessageResponse(message="healthy")
 
-# --- Auth Endpoints ---
+# --- Auth Endpoints (These are typically kept as they are) ---
 
 @app.post("/api/auth/signup", response_model=AuthSuccessResponse, responses={400: {"model": ErrorResponse}, 500: {"model": ErrorResponse}})
 async def signup(signup_data: UserSignupRequest, request: Request):
@@ -199,7 +198,7 @@ async def signup(signup_data: UserSignupRequest, request: Request):
         "password": hashed_password,
         "createdAt": datetime.now(UTC),
         "social_login_provider": None,
-        "profile": {} # ⭐ Added for consistency
+        "profile": {}
     }
     result = users_collection_dep.insert_one(user_data)
     user_id = str(result.inserted_id)
@@ -210,7 +209,7 @@ async def signup(signup_data: UserSignupRequest, request: Request):
         firstName=signup_data.firstName,
         lastName=signup_data.lastName,
         email=signup_data.email,
-        profile={} # ⭐ Added for consistency in UserResponse
+        profile={}
     )
 
     return AuthSuccessResponse(token=token, user=user_response_data, message="User registered successfully")
@@ -240,7 +239,7 @@ async def login(login_data: UserLoginRequest, request: Request):
         firstName=user["firstName"],
         lastName=user["lastName"],
         email=user["email"],
-        profile=user.get("profile", {}) # ⭐ Ensure profile is always an object
+        profile=user.get("profile", {})
     )
 
     return AuthSuccessResponse(token=token, user=user_response_data, message=f"Welcome back, {user['firstName']}!")
@@ -284,7 +283,7 @@ async def google_auth(google_auth_data: GoogleAuthRequest, request: Request):
                 "password": dummy_password,
                 "createdAt": datetime.now(UTC),
                 "social_login_provider": "google",
-                "profile": {"name": full_name} # ⭐ Ensure profile is stored in DB for new social users
+                "profile": {"name": full_name}
             }
             result = users_collection_dep.insert_one(user_data)
             user_id = str(result.inserted_id)
@@ -353,7 +352,7 @@ async def facebook_auth(facebook_auth_data: FacebookAuthRequest, request: Reques
                     "password": dummy_password,
                     "createdAt": datetime.now(UTC),
                     "social_login_provider": "facebook",
-                    "profile": {"name": full_name} # ⭐ Ensure profile is stored in DB for new social users
+                    "profile": {"name": full_name}
                 }
                 result = users_collection_dep.insert_one(user_data)
                 user_id = str(result.inserted_id)
@@ -381,12 +380,15 @@ async def facebook_auth(facebook_auth_data: FacebookAuthRequest, request: Reques
 @app.get("/api/chats", response_model=ChatsListResponse, responses={401: {"model": ErrorResponse}, 500: {"model": ErrorResponse}})
 async def get_user_chats(
     request: Request,
-    current_user_id: str = Depends(get_current_user_id),
+    # current_user_id: str = Depends(get_current_user_id), # AUTH BYPASS: Commented out dependency
 ):
+    # AUTH BYPASS: Define a temporary user ID
+    current_user_id = "test_user_for_bypass"
+
     chats_collection_dep = request.app.state.chats_collection
 
     user_chats_raw = list(chats_collection_dep.find(
-        {"participants": current_user_id},
+        {"participants": current_user_id}, # This query still filters by participant. For full bypass, remove "participants": current_user_id
         {"_id": 1, "participants": 1, "lastMessage": 1, "lastActivity": 1, "title": 1}
     ))
     
@@ -402,19 +404,20 @@ async def get_user_chats(
 async def create_chat(
     chat_data: CreateChatRequest,
     request: Request,
-    current_user_id: str = Depends(get_current_user_id),
+    # current_user_id: str = Depends(get_current_user_id), # AUTH BYPASS: Commented out dependency
 ):
+    # AUTH BYPASS: Define a temporary user ID
+    current_user_id = "test_user_for_bypass"
+
     chats_collection_dep = request.app.state.chats_collection
     messages_collection_dep = request.app.state.messages_collection
-    openai_client_dep = request.app.state.openai_client # Get OpenAI client dependency
+    openai_client_dep = request.app.state.openai_client 
 
     chat_title = chat_data.title if chat_data.title is not None else "ungli-untitled"
     chat_type = chat_data.type
     participants = [current_user_id]
 
-    # ⭐ First question from the APPROVED list
     initial_ai_question = "What is the name or model of the product?"
-    # ⭐ Combined greeting and first question
     welcome_message_content = f"Hello! {initial_ai_question}"
 
     new_chat_doc = {
@@ -423,108 +426,86 @@ async def create_chat(
         "participants": participants,
         "createdAt": datetime.now(UTC),
         "lastActivity": datetime.now(UTC),
-        "lastMessage": welcome_message_content # Initial message for chat summary
+        "lastMessage": welcome_message_content
     }
     
     result = chats_collection_dep.insert_one(new_chat_doc)
     new_chat_id = str(result.inserted_id)
 
-    # Store the initial AI message with the greeting and first question
     llm_store_message(
         messages_collection=messages_collection_dep,
         chat_id=new_chat_id,
         user_id=BOT_USER_ID,
         content=welcome_message_content,
         sender=BOT_SENDER_NAME,
-        timestamp=datetime.now(UTC) # Use current timestamp for initial bot message
+        timestamp=datetime.now(UTC)
     )
 
-    # Fetch the newly created chat document to ensure all fields are present
     created_chat_doc = chats_collection_dep.find_one({"_id": ObjectId(new_chat_id)})
     
     if not created_chat_doc:
         raise HTTPException(status_code=500, detail="Failed to retrieve created chat.")
 
-    # Convert ObjectId to string for Pydantic serialization
     created_chat_doc['_id'] = str(created_chat_doc['_id'])
 
-    # The frontend's `chatService.createChat` was adapted to expect
-    # `{ success: true, chats: [...] }` from the backend's POST /api/chats.
-    # So, let's construct that response here.
-    return ChatsListResponse( # Changed response_model to ChatsListResponse for consistency
+    return ChatsListResponse(
         success=True,
-        chats=[ChatModel(**created_chat_doc)] # Return the new chat inside a list
+        chats=[ChatModel(**created_chat_doc)]
     )
 
 
 # --- Message Endpoints ---
 
-# --- Message Endpoints ---
-
-# ⭐ CHANGED response_model to TransformedChatMessagesResponse
 @app.get("/api/chats/{chat_id}/messages", response_model=TransformedChatMessagesResponse, responses={401: {"model": ErrorResponse}, 404: {"model": ErrorResponse}, 500: {"model": ErrorResponse}})
 async def get_chat_messages(
     chat_id: str,
     request: Request,
-    current_user_id: str = Depends(get_current_user_id),
+    # current_user_id: str = Depends(get_current_user_id), # AUTH BYPASS: Commented out dependency
 ):
+    # AUTH BYPASS: Define a temporary user ID
+    current_user_id = "test_user_for_bypass"
+
     chats_collection_dep = request.app.state.chats_collection
     messages_collection_dep = request.app.state.messages_collection
 
-    chat = chats_collection_dep.find_one({"_id": ObjectId(chat_id), "participants": current_user_id})
+    # AUTH BYPASS: Changed query to potentially remove participant check for easier testing
+    # Original: chat = chats_collection_dep.find_one({"_id": ObjectId(chat_id), "participants": current_user_id})
+    chat = chats_collection_dep.find_one({"_id": ObjectId(chat_id)}) # Simpler for bypass
     if not chat:
-        raise HTTPException(status_code=404, detail="Chat not found or access denied")
+        raise HTTPException(status_code=404, detail="Chat not found")
 
     messages_raw = list(messages_collection_dep.find(
         {"chatId": chat_id},
         {"_id": 1, "chatId": 1, "userId": 1, "content": 1, "timestamp": 1, "sender": 1}
     ).sort("timestamp", 1))
 
-    # --- Start Updated Transformation Logic ---
-    # This revised logic creates separate ConversationTurn objects for each
-    # distinct message (bot or user), making the 'role' explicit for rendering.
-    
     conversation_turns: List[ConversationTurn] = []
 
     for msg in messages_raw:
         sender_id = str(msg['userId'])
         content = msg['content']
-        timestamp = msg.get('timestamp', datetime.now(UTC)) # Use .get for safety, default to UTC now if missing
+        timestamp = msg.get('timestamp', datetime.now(UTC))
 
-        # Determine the actual sender role (user or assistant/bot)
         sender_role_actual = 'assistant' if sender_id == BOT_USER_ID else 'user'
 
         if sender_role_actual == 'assistant':
-            # Create a turn for the assistant's message
             conversation_turns.append(ConversationTurn(
-                question=content,    # Assistant's content goes into 'question'
-                answer="",           # Assistant messages don't have an 'answer' in this format
-                timestamp=timestamp, # Use the message's timestamp
-                role="assistant"     # Explicitly mark this turn as from the assistant
+                question=content,
+                answer="",
+                timestamp=timestamp,
+                role="assistant"
             ))
-        else: # sender_role_actual == 'user'
-            # Create a turn for the user's message
+        else:
             conversation_turns.append(ConversationTurn(
-                question="",         # User messages don't have a 'question' in this format
-                answer=content,      # User's content goes into 'answer'
-                timestamp=timestamp, # Use the message's timestamp
-                role="user"          # Explicitly mark this turn as from the user
+                question="",
+                answer=content,
+                timestamp=timestamp,
+                role="user"
             ))
             
-    # --- End Updated Transformation Logic ---
-    
-    # Optional: Add a print statement here to verify the structure before sending
-    print(f"\n--- Backend Sending Transformed Chat History for chat_id: {chat_id} ---")
-    if not conversation_turns:
-        print("  (No conversation turns generated)")
-    for i, turn in enumerate(conversation_turns):
-        print(f"  Turn {i+1}: Role='{turn.role}', Question='{turn.question[:80]}...', Answer='{turn.answer[:80]}...', Timestamp='{turn.timestamp}'")
-    print("---------------------------------------------------------------------------\n")
-
-    # Return the transformed data using the new Pydantic model
     return TransformedChatMessagesResponse(
-        id=chat_id, # This will be mapped to _id by Pydantic
-        session_uuid=chat_id, # Reusing chat_id as session_uuid
+        id=chat_id,
+        session_uuid=chat_id,
         messages=conversation_turns
     )
 
@@ -534,27 +515,33 @@ async def post_message(
     chat_id: str,
     message_data: SendMessageRequest,
     request: Request,
-    current_user_id: str = Depends(get_current_user_id),
+    # current_user_id: str = Depends(get_current_user_id), # AUTH BYPASS: Commented out dependency
 ):
+    # AUTH BYPASS: Define a temporary user ID
+    current_user_id = "test_user_for_bypass"
+
     users_collection_dep = request.app.state.users_collection
     chats_collection_dep = request.app.state.chats_collection
     messages_collection_dep = request.app.state.messages_collection
     openai_client_dep = request.app.state.openai_client
 
-    chat = chats_collection_dep.find_one({"_id": ObjectId(chat_id), "participants": current_user_id})
+    # AUTH BYPASS: Changed query to potentially remove participant check for easier testing
+    # Original: chat = chats_collection_dep.find_one({"_id": ObjectId(chat_id), "participants": current_user_id})
+    chat = chats_collection_dep.find_one({"_id": ObjectId(chat_id)}) # Simpler for bypass
     if not chat:
-        raise HTTPException(status_code=404, detail="Chat not found or access denied")
+        raise HTTPException(status_code=404, detail="Chat not found")
 
     if not message_data.content:
         raise HTTPException(status_code=400, detail="Message content is required")
     
-    user_info = users_collection_dep.find_one({"_id": ObjectId(current_user_id)})
-    user_sender_name = user_info.get("firstName", "User") if user_info else "User"
+    # AUTH BYPASS: user_info is no longer needed since current_user_id is hardcoded
+    # user_info = users_collection_dep.find_one({"_id": ObjectId(current_user_id)})
+    # user_sender_name = user_info.get("firstName", "User") if user_info else "User"
 
     user_message_instance = llm_store_message(
         messages_collection=messages_collection_dep,
         chat_id=chat_id,
-        user_id=current_user_id,
+        user_id=current_user_id, # Use the dummy user ID
         content=message_data.content,
         sender="user"
     )
@@ -569,27 +556,25 @@ async def post_message(
 
     try:
         bot_response_content = await ask_openai(
-            user_message_content=message_data.content, # ⭐ CHANGED TO user_message_content
+            user_message_content=message_data.content,
             chat_id=chat_id,
-            user_id=current_user_id,
+            user_id=current_user_id, # Pass the dummy user ID to ask_openai if it uses it
             openai_client=openai_client_dep,
             messages_collection=messages_collection_dep,
         )
     except Exception as e:
         print(f"Error getting AI response: {e}")
-        # Add detailed traceback for better debugging
         import traceback
         traceback.print_exc()
         bot_response_content = "I'm having trouble responding right now. Please try again later."
     
-    # Store bot message
     bot_message_instance = llm_store_message(
         messages_collection=messages_collection_dep,
         chat_id=chat_id,
         user_id=BOT_USER_ID,
         content=bot_response_content,
         sender=BOT_SENDER_NAME,
-        timestamp=datetime.now(UTC) + timedelta(milliseconds=1) # Ensure bot message timestamp is slightly after user's
+        timestamp=datetime.now(UTC) + timedelta(milliseconds=1)
     )
 
     chats_collection_dep.update_one(
@@ -600,23 +585,18 @@ async def post_message(
         }}
     )
     return MessageSuccessResponse(
-        success=True, # Explicitly set success to True
+        success=True,
         message=ConversationTurn(
-            question=bot_message_instance.content, # Bot's content is the "question"
-            answer="", # The bot's response itself doesn't have an "answer" field within this turn
+            question=bot_message_instance.content,
+            answer="",
             timestamp=bot_message_instance.timestamp,
             role="assistant"
         )
     )
 
 
-
-
 # --- Initialize Chat Session (for unauthenticated or initial frontend load) ---
-# ⭐ IMPORTANT: If you want /api/chat/init to also return the new format,
-# you'll need to apply similar transformation logic here and change its response_model.
-# For now, I've left it returning MessagesListResponse with MessageModel objects,
-# as changing it might break existing frontend logic that expects that format for init.
+# This endpoint already handles unauthenticated sessions and doesn't rely on get_current_user_id.
 @app.get("/api/chat/init", response_model=MessagesListResponse, responses={500: {"model": ErrorResponse}})
 async def initialize_chat_session(request: Request):
     messages_collection_dep = request.app.state.messages_collection
@@ -624,17 +604,15 @@ async def initialize_chat_session(request: Request):
 
     session_uuid = request.session.get("chat_uuid")
     
-    # ⭐ Changed initial message for init endpoint
     initial_ai_question = "What is the name or model of the product?"
     first_bot_message_content = f"Hello! {initial_ai_question}"
 
-    current_user_id = "temp_user_id_for_init" # Important for unauthenticated sessions
+    current_user_id = "temp_user_id_for_init" # Important for unauthenticated sessions handled by this route
 
     if not session_uuid:
-        session_uuid = str(ObjectId()) # Using ObjectId for consistency with MongoDB IDs
+        session_uuid = str(ObjectId())
         request.session["chat_uuid"] = session_uuid
         
-        # Store the initial assistant message
         llm_store_message(
             messages_collection=messages_collection_dep,
             chat_id=session_uuid,
@@ -642,7 +620,6 @@ async def initialize_chat_session(request: Request):
             content=first_bot_message_content,
             sender=BOT_SENDER_NAME
         )
-        # Create a new chat session entry for this UUID
         chats_collection_dep.insert_one({
             "_id": ObjectId(session_uuid),
             "participants": [BOT_USER_ID, current_user_id],
@@ -651,15 +628,13 @@ async def initialize_chat_session(request: Request):
             "lastActivity": datetime.now(UTC),
             "lastMessage": first_bot_message_content
         })
-        # When fetching for display, convert to MessageModel
         qa_log_raw = messages_collection_dep.find({"chatId": session_uuid}).sort("timestamp", 1)
-        qa_log = [MessageModel(**{**msg, 'id': str(msg['_id'])}) for msg in qa_log_raw] # Map _id to id if necessary for MessageModel
+        qa_log = [MessageModel(**{**msg, 'id': str(msg['_id'])}) for msg in qa_log_raw]
     else:
         qa_log_raw = messages_collection_dep.find({"chatId": session_uuid}).sort("timestamp", 1)
-        qa_log = [MessageModel(**{**msg, 'id': str(msg['_id'])}) for msg in qa_log_raw] # Map _id to id if necessary for MessageModel
+        qa_log = [MessageModel(**{**msg, 'id': str(msg['_id'])}) for msg in qa_log_raw]
 
-        if not qa_log: # Chat session might be empty or invalid
-            # Re-initialize if session_uuid exists but chat is empty
+        if not qa_log:
             session_uuid = str(ObjectId())
             request.session["chat_uuid"] = session_uuid
             llm_store_message(
@@ -678,8 +653,7 @@ async def initialize_chat_session(request: Request):
                 "lastMessage": first_bot_message_content
             })
             qa_log_raw = messages_collection_dep.find({"chatId": session_uuid}).sort("timestamp", 1)
-            qa_log = [MessageModel(**{**msg, 'id': str(msg['_id'])}) for msg in qa_log_raw] # Map _id to id if necessary for MessageModel
-        # else: qa_log is already populated above
+            qa_log = [MessageModel(**{**msg, 'id': str(msg['_id'])}) for msg in qa_log_raw]
 
     return MessagesListResponse(messages=qa_log)
 
@@ -696,7 +670,6 @@ async def trigger_search_pipeline_api(request: Request):
     if not session_uuid:
         return JSONResponse(status_code=400, content={"detail": "Session UUID not found."})
 
-    # Synchronous wrapper function
     def run_module2_sync(session_id: str):
         try:
             print(f"🔍 Module 2 search pipeline started for session: {session_id}...")
@@ -705,12 +678,10 @@ async def trigger_search_pipeline_api(request: Request):
         except Exception as e:
             print(f"❌ Error in Module 2 pipeline for session {session_id}: {e}")
 
-    # Async wrapper using run_in_executor
     async def run_module2_background_task(session_id: str):
         loop = asyncio.get_running_loop()
         await loop.run_in_executor(None, run_module2_sync, session_id)
 
-    # Launch the async background task
     asyncio.create_task(run_module2_background_task(session_uuid))
 
     return SuccessMessageResponse(message="Search pipeline started in the background.")

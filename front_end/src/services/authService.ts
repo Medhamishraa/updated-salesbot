@@ -34,6 +34,14 @@ export interface AuthResponse {
   message?: string;
 }
 
+// ⭐ NEW: List of endpoints that are bypassed in the backend
+// Ensure these match your FastAPI backend's bypassed routes
+const BYPASSED_CHAT_ENDPOINTS_PREFIXES = [
+    `${API_BASE_URL}/api/chats`,
+    `${API_BASE_URL}/api/chat/init`,
+    `${API_BASE_URL}/api/trigger_search_pipeline`,
+];
+
 class AuthService {
   // ⭐ NEW HELPER: Handles unauthorized responses and redirects to login
   private async handleUnauthorizedResponse(response: Response): Promise<void> {
@@ -64,25 +72,31 @@ class AuthService {
     }
   }
 
-  // ⭐ NEW: Generic fetch wrapper with authentication and error handling
+  // ⭐ MODIFIED: Generic fetch wrapper with authentication and error handling
   // This will be used by other services (like chatService) for authenticated requests.
   async fetchWithAuth(url: string, options?: RequestInit): Promise<Response> {
-    const token = this.getToken();
+    // Check if the current URL matches any of the bypassed chat endpoints
+    const isBypassedChatEndpoint = BYPASSED_CHAT_ENDPOINTS_PREFIXES.some(prefix => url.startsWith(prefix));
+
     const headers: HeadersInit = {
       'Content-Type': 'application/json',
       ...(options?.headers || {}), // Merge any custom headers provided in options
     };
 
-    if (token) {
+    const token = this.getToken();
+
+    // Only add Authorization header if a token exists AND the endpoint is NOT bypassed
+    if (token && !isBypassedChatEndpoint) {
       headers['Authorization'] = `Bearer ${token}`;
-    } else {
-      // If no token exists, but an authenticated endpoint is being called,
-      // proactively redirect. This helps prevent 401s for missing tokens.
+    } else if (!token && !isBypassedChatEndpoint) {
+      // If no token exists AND it's NOT a bypassed endpoint, then redirect to login
       console.warn(`Attempted to call authenticated endpoint ${url} without a token. Redirecting.`);
       this.logout();
       window.location.href = '/login';
       throw new Error("TokenExpired"); // Stop execution
     }
+    // If it's a bypassed endpoint (isBypassedChatEndpoint is true), we proceed without a token,
+    // regardless of whether `token` exists or not.
 
     const response = await fetch(url, {
       ...options,
@@ -90,6 +104,8 @@ class AuthService {
     });
 
     // Handle 401s and other non-OK responses centrally
+    // Note: For bypassed endpoints, the backend should not return 401s due to missing auth.
+    // However, if it returns 401 for other reasons (e.g., chat not found), this will still catch it.
     await this.handleUnauthorizedResponse(response);
 
     return response;
@@ -247,14 +263,25 @@ class AuthService {
   }
 
   isAuthenticated(): boolean {
-    // This check is synchronous and purely based on local storage presence.
-    // Full token validity is deferred to the backend on API calls.
-    return !!localStorage.getItem('authToken');
+    // ⭐ MODIFIED: TEMPORARY BYPASS - ALWAYS RETURN TRUE FOR TESTING
+    // This allows the frontend to proceed as if authenticated.
+    // Original: return !!localStorage.getItem('authToken');
+    return true; 
   }
 
   getUser(): { username?: string; email?: string; profile?: any; [key: string]: any } | null {
     const userStr = localStorage.getItem('user');
     try {
+      // If we are bypassing auth, we might want to return a dummy user for UI consistency
+      if (this.isAuthenticated() && !userStr) {
+          return {
+              id: "test_user_for_bypass", // Matches backend's hardcoded ID
+              firstName: "Test",
+              lastName: "User",
+              email: "test@example.com",
+              profile: { name: "Test User" }
+          };
+      }
       return userStr ? JSON.parse(userStr) : null;
     } catch (e) {
       console.error("Failed to parse user from localStorage", e);
@@ -264,6 +291,10 @@ class AuthService {
   }
 
   getToken(): string | null {
+    // ⭐ MODIFIED: For bypassed endpoints, we don't need a real token.
+    // Returning null for bypassed endpoints will prevent the header from being sent.
+    // For non-bypassed endpoints, we still need the real token from local storage.
+    // This logic relies on the `fetchWithAuth` method's `isBypassedChatEndpoint` check.
     return localStorage.getItem('authToken');
   }
 }
