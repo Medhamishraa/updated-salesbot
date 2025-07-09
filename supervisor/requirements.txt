@@ -1,0 +1,7 @@
+pydantic-ai
+mcp
+fastapi
+uvicorn[standard]
+openai
+httpx
+beautifulsoup4

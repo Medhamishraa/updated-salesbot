@@ -1,0 +1,40 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Customer Discovery Bot</title>
+  <link rel="stylesheet" href="/static/style.css" />
+</head>
+<body>
+  <div class="container">
+    <h1>Customer Discovery Bot</h1>
+
+    <div class="current-question">
+      <div class="question">🤖 {{ question }}</div>
+    </div>
+
+    <form method="POST" class="input-form">
+        <label for="answer">Your Answer:</label>
+        <input type="text" name="answer" id="answer" placeholder="Type your answer here..." autocomplete="off" />
+        
+        <button type="submit" name="end_conversation" value="false">Submit</button>
+        <button type="submit" name="end_conversation" value="true" style="background-color: #e74c3c; color: white;">
+          End Conversation
+        </button>
+      </form>
+
+    <div class="history" style="margin-top: 2rem;">
+      {% for item in qa_log %}
+        <div class="qa-block">
+          {% if item.role == "assistant" %}
+            <div class="question">🤖 {{ item.question }}</div>
+          {% elif item.role == "user" %}
+            <div class="answer">🧑 {{ item.answer }}</div>
+          {% endif %}
+        </div>
+      {% endfor %}
+    </div>
+  </div>
+</body>
+</html>

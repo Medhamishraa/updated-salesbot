@@ -1,0 +1,26 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>Conversation Complete</title>
+    <link rel="stylesheet" href="/static/style.css">
+</head>
+<body>
+    <h2>Final Q&A</h2>
+
+    {% for item in qa_log %}
+        {% if item.role == "assistant" %}
+            <div class="qa-block">
+                <div class="question">Q: {{ item.question }}</div>
+        {% elif item.role == "user" %}
+                <div class="answer">A: {{ item.answer }}</div>
+            </div>
+        {% endif %}
+    {% endfor %}
+
+    <p>Thank you! Your product has been analyzed.</p>
+
+    {% if search_started %}
+        <p style="color: green; font-weight: bold;">🔍 Company search started. Results will be available shortly...</p>
+    {% endif %}
+</body>
+</html>
