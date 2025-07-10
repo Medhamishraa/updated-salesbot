@@ -9,140 +9,91 @@ from datetime import datetime, timedelta, UTC
 from typing import List, Optional, Dict, Any
 import asyncio
 
-# For Google OAuth ID Token verification
 from google.oauth2 import id_token
 from google.auth.transport import requests as google_requests
 
-# --- Environment Variable Loading ---
 from dotenv import load_dotenv
 load_dotenv()
 
-# --- MongoDB Client Import ---
 from pymongo import MongoClient
 
-# --- JWT Imports and Configuration ---
 import jwt
-from fastapi import Header, Depends, HTTPException, status, Request
-from fastapi.responses import JSONResponse
-
-JWT_SECRET = os.getenv("JWT_SECRET", "your-super-secret-jwt-key-please-change-me")
-# You should add JWT_SECRET to your .env file: JWT_SECRET="some_long_random_string_of_characters"
-
-# --- Constants for Bot ---
-BOT_USER_ID = "ungli_bot_system_id_12345"
-BOT_SENDER_NAME = "bot"
-
-# --- JWT Token Verification Helpers ---
-def generate_token(user_id: str, email: str):
-    payload = {
-        'user_id': user_id,
-        'email': email,
-        'exp': datetime.now(UTC) + timedelta(days=7) # Token expires in 7 days
-    }
-    return jwt.encode(payload, JWT_SECRET, algorithm='HS256')
-
-def verify_token(token: str):
-    try:
-        payload = jwt.decode(token, JWT_SECRET, algorithms=['HS256'])
-        return payload
-    except jwt.ExpiredSignatureError:
-        print("Token has expired.") # For debugging
-        return None
-    except jwt.InvalidTokenError:
-        print("Invalid token.") # For debugging
-        return None
-
-# --- Authentication Dependency ---
-# This dependency is kept but will no longer be used by the bypassed endpoints
-async def get_current_user_id(authorization: str = Header(None)):
-    if not authorization:
-        raise HTTPException(status_code=401, detail="Authorization token is missing!")
-
-    token = authorization.split(" ")[1] if "Bearer" in authorization else authorization
-    payload = verify_token(token)
-
-    if not payload:
-        raise HTTPException(status_code=401, detail="Token is invalid or expired!")
-
-    return payload['user_id']
-
-
-# --- Environment Variable Validation ---
-MONGO_URI = os.getenv("MONGO_URI")
-OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
-GOOGLE_CLIENT_ID = os.getenv("GOOGLE_CLIENT_ID") # Your Google Web Client ID
-
-FACEBOOK_APP_ID = os.getenv("FACEBOOK_APP_ID")
-FACEBOOK_APP_SECRET = os.getenv("FACEBOOK_APP_SECRET")
-
-# Validate essential environment variables
-if not MONGO_URI:
-    raise ValueError("MONGO_URI not found. Please set it in .env file.")
-if not OPENAI_API_KEY:
-    raise ValueError("OPENAI_API_KEY not found. Please set it in .env file.")
-if not GOOGLE_CLIENT_ID:
-    print("Warning: GOOGLE_CLIENT_ID not set. Google login may not work.")
-if not FACEBOOK_APP_ID or not FACEBOOK_APP_SECRET:
-    print("Warning: Facebook OAuth credentials not fully set. Facebook login may not work.")
-
-
-# --- App Setup ---
-from fastapi import FastAPI, Request, Form, HTTPException, status
+from fastapi import Header, Depends, HTTPException, status, Request, FastAPI, Form
 from fastapi.responses import JSONResponse, RedirectResponse
 from fastapi.middleware.cors import CORSMiddleware
 from starlette.middleware.sessions import SessionMiddleware
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 
+JWT_SECRET = os.getenv("JWT_SECRET", "your-super-secret-jwt-key-please-change-me")
+BOT_USER_ID = "ungli_bot_system_id_12345"
+BOT_SENDER_NAME = "bot"
+
+# JWT Helpers
+def generate_token(user_id: str, email: str):
+    payload = {
+        'user_id': user_id,
+        'email': email,
+        'exp': datetime.now(UTC) + timedelta(days=7)
+    }
+    return jwt.encode(payload, JWT_SECRET, algorithm='HS256')
+
+def verify_token(token: str):
+    try:
+        return jwt.decode(token, JWT_SECRET, algorithms=['HS256'])
+    except jwt.ExpiredSignatureError:
+        print("Token has expired.")
+        return None
+    except jwt.InvalidTokenError:
+        print("Invalid token.")
+        return None
+
+async def get_current_user_id(authorization: str = Header(None)):
+    if not authorization:
+        raise HTTPException(status_code=401, detail="Authorization token is missing!")
+    token = authorization.split(" ")[1] if "Bearer" in authorization else authorization
+    payload = verify_token(token)
+    if not payload:
+        raise HTTPException(status_code=401, detail="Token is invalid or expired!")
+    return payload['user_id']
+
+MONGO_URI = os.getenv("MONGO_URI")
+OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
+GOOGLE_CLIENT_ID = os.getenv("GOOGLE_CLIENT_ID")
+FACEBOOK_APP_ID = os.getenv("FACEBOOK_APP_ID")
+FACEBOOK_APP_SECRET = os.getenv("FACEBOOK_APP_SECRET")
+
+if not MONGO_URI:
+    raise ValueError("MONGO_URI not found. Please set it in .env file.")
+if not OPENAI_API_KEY:
+    raise ValueError("OPENAI_API_KEY not found. Please set it in .env file.")
 
 app = FastAPI()
 
-# --- CORS Middleware ---
 origins = [
-    "http://localhost:8080", # Your frontend's development URL
-    "http://localhost:8081", # Another common frontend development port
+    "http://localhost:8080",
+    "http://localhost:8081",
     "http://127.0.0.1:8080",
     "http://127.0.0.1:8081",
-    # Add your production frontend URL here when deployed
 ]
 
-app.add_middleware(
-    CORSMiddleware,
-    allow_origins=origins,
-    allow_credentials=True,
-    allow_methods=["*"],
-    allow_headers=["*"],
-)
-
+app.add_middleware(CORSMiddleware, allow_origins=origins, allow_credentials=True, allow_methods=["*"], allow_headers=["*"])
 app.add_middleware(SessionMiddleware, secret_key="supersecretkey")
 
-
-# --- Database & OpenAI Client Initialization ---
 @app.on_event("startup")
 async def startup_db_client():
-    print("Connecting to MongoDB...")
     app.state.mongo_client = MongoClient(MONGO_URI, tlsCAFile=certifi.where())
     app.state.db = app.state.mongo_client["chatSaaS"]
     app.state.users_collection = app.state.db["users_creds"]
     app.state.chats_collection = app.state.db["chats"]
     app.state.messages_collection = app.state.db["messages"]
-    print("MongoDB connected.")
-
-    print("Initializing OpenAI client...")
     app.state.openai_client = OpenAI(api_key=OPENAI_API_KEY)
-    print("OpenAI client initialized.")
-
 
 @app.on_event("shutdown")
 async def shutdown_db_client():
-    print("Closing MongoDB connection...")
     if hasattr(app.state, 'mongo_client') and app.state.mongo_client:
         app.state.mongo_client.close()
-    print("MongoDB connection closed.")
 
-
-# --- Import Schemas ---
-# Make sure this path is correct relative to where api.py is
 from front_end_llm.pydantic_models import (
     UserLoginRequest, UserSignupRequest, UserResponse,
     SendMessageRequest, CreateChatRequest,
@@ -150,35 +101,24 @@ from front_end_llm.pydantic_models import (
     ChatsListResponse, MessageSuccessResponse, MessagesListResponse, ErrorResponse,
     Chat as ChatModel,
     Message as MessageModel,
-    GoogleAuthRequest,FacebookAuthRequest,ConversationTurn,
+    GoogleAuthRequest, FacebookAuthRequest, ConversationTurn,
     TransformedChatMessagesResponse
 )
 
-# --- Import LLM-related Utilities ---
-# Make sure this path is correct relative to where api.py is
 from front_end_llm.utils import (
     store_message as llm_store_message,
     get_qa_history_for_llm,
     build_history,
 )
-
-# Import ask_openai from its new location
 from front_end_llm.front_end_llm import ask_openai
-
-# Import prompts from the canonical prompts.py for the first question
 from front_end_llm.prompts import SYSTEM_PROMPT, RETRY_PROMPT_SUFFIX, NEXT_QUESTION_PROMPT
 
+# === NEXT CHUNK: Routes start from here ===
 
-# ----------------------------
-# Backend API Routes
-# ----------------------------
-
-# Health Check Endpoint
 @app.get("/api/health", response_model=SuccessMessageResponse)
 async def health_check():
     return SuccessMessageResponse(message="healthy")
-
-# --- Auth Endpoints (These are typically kept as they are) ---
+# --- Auth Endpoints ---
 
 @app.post("/api/auth/signup", response_model=AuthSuccessResponse, responses={400: {"model": ErrorResponse}, 500: {"model": ErrorResponse}})
 async def signup(signup_data: UserSignupRequest, request: Request):
@@ -243,7 +183,6 @@ async def login(login_data: UserLoginRequest, request: Request):
     )
 
     return AuthSuccessResponse(token=token, user=user_response_data, message=f"Welcome back, {user['firstName']}!")
-
 @app.post("/api/auth/google", response_model=AuthSuccessResponse, responses={400: {"model": ErrorResponse}, 500: {"model": ErrorResponse}})
 async def google_auth(google_auth_data: GoogleAuthRequest, request: Request):
     users_collection_dep = request.app.state.users_collection
@@ -303,9 +242,6 @@ async def google_auth(google_auth_data: GoogleAuthRequest, request: Request):
     except Exception as e:
         print(f"Google authentication error: {e}")
         raise HTTPException(status_code=500, detail="Google authentication failed due to an internal error.")
-
-
-# --- FACEBOOK AUTHENTICATION ENDPOINT ---
 @app.post("/api/auth/facebook", response_model=AuthSuccessResponse, responses={400: {"model": ErrorResponse}, 500: {"model": ErrorResponse}})
 async def facebook_auth(facebook_auth_data: FacebookAuthRequest, request: Request):
     users_collection_dep = request.app.state.users_collection
@@ -373,45 +309,37 @@ async def facebook_auth(facebook_auth_data: FacebookAuthRequest, request: Reques
         except Exception as e:
             print(f"Facebook authentication error: {e}")
             raise HTTPException(status_code=500, detail="Facebook authentication failed due to an internal error.")
-
-
-# --- Chat Endpoints ---
-
 @app.get("/api/chats", response_model=ChatsListResponse, responses={401: {"model": ErrorResponse}, 500: {"model": ErrorResponse}})
 async def get_user_chats(
     request: Request,
-    # current_user_id: str = Depends(get_current_user_id), # AUTH BYPASS: Commented out dependency
+    # current_user_id: str = Depends(get_current_user_id),  # AUTH BYPASS
 ):
-    # AUTH BYPASS: Define a temporary user ID
     current_user_id = "test_user_for_bypass"
 
     chats_collection_dep = request.app.state.chats_collection
 
     user_chats_raw = list(chats_collection_dep.find(
-        {"participants": current_user_id}, # This query still filters by participant. For full bypass, remove "participants": current_user_id
+        {"participants": current_user_id},
         {"_id": 1, "participants": 1, "lastMessage": 1, "lastActivity": 1, "title": 1}
     ))
-    
+
     user_chats = []
     for chat_data in user_chats_raw:
-        # Convert ObjectId to string for Pydantic serialization
-        chat_data['_id'] = str(chat_data['_id'])
-        user_chats.append(ChatModel(**chat_data)) # Use ChatModel here
+        chat_data['_id'] = str(chat_data['_id'])  # Convert ObjectId to str
+        user_chats.append(ChatModel(**chat_data))
 
     return ChatsListResponse(chats=user_chats)
-
 @app.post("/api/chats", response_model=ChatsListResponse, responses={401: {"model": ErrorResponse}, 500: {"model": ErrorResponse}})
 async def create_chat(
     chat_data: CreateChatRequest,
     request: Request,
-    # current_user_id: str = Depends(get_current_user_id), # AUTH BYPASS: Commented out dependency
+    # current_user_id: str = Depends(get_current_user_id),  # AUTH BYPASS
 ):
-    # AUTH BYPASS: Define a temporary user ID
     current_user_id = "test_user_for_bypass"
 
     chats_collection_dep = request.app.state.chats_collection
     messages_collection_dep = request.app.state.messages_collection
-    openai_client_dep = request.app.state.openai_client 
+    openai_client_dep = request.app.state.openai_client
 
     chat_title = chat_data.title if chat_data.title is not None else "ungli-untitled"
     chat_type = chat_data.type
@@ -428,7 +356,7 @@ async def create_chat(
         "lastActivity": datetime.now(UTC),
         "lastMessage": welcome_message_content
     }
-    
+
     result = chats_collection_dep.insert_one(new_chat_doc)
     new_chat_id = str(result.inserted_id)
 
@@ -442,7 +370,6 @@ async def create_chat(
     )
 
     created_chat_doc = chats_collection_dep.find_one({"_id": ObjectId(new_chat_id)})
-    
     if not created_chat_doc:
         raise HTTPException(status_code=500, detail="Failed to retrieve created chat.")
 
@@ -452,72 +379,13 @@ async def create_chat(
         success=True,
         chats=[ChatModel(**created_chat_doc)]
     )
-
-
-# --- Message Endpoints ---
-
-@app.get("/api/chats/{chat_id}/messages", response_model=TransformedChatMessagesResponse, responses={401: {"model": ErrorResponse}, 404: {"model": ErrorResponse}, 500: {"model": ErrorResponse}})
-async def get_chat_messages(
-    chat_id: str,
-    request: Request,
-    # current_user_id: str = Depends(get_current_user_id), # AUTH BYPASS: Commented out dependency
-):
-    # AUTH BYPASS: Define a temporary user ID
-    current_user_id = "test_user_for_bypass"
-
-    chats_collection_dep = request.app.state.chats_collection
-    messages_collection_dep = request.app.state.messages_collection
-
-    # AUTH BYPASS: Changed query to potentially remove participant check for easier testing
-    # Original: chat = chats_collection_dep.find_one({"_id": ObjectId(chat_id), "participants": current_user_id})
-    chat = chats_collection_dep.find_one({"_id": ObjectId(chat_id)}) # Simpler for bypass
-    if not chat:
-        raise HTTPException(status_code=404, detail="Chat not found")
-
-    messages_raw = list(messages_collection_dep.find(
-        {"chatId": chat_id},
-        {"_id": 1, "chatId": 1, "userId": 1, "content": 1, "timestamp": 1, "sender": 1}
-    ).sort("timestamp", 1))
-
-    conversation_turns: List[ConversationTurn] = []
-
-    for msg in messages_raw:
-        sender_id = str(msg['userId'])
-        content = msg['content']
-        timestamp = msg.get('timestamp', datetime.now(UTC))
-
-        sender_role_actual = 'assistant' if sender_id == BOT_USER_ID else 'user'
-
-        if sender_role_actual == 'assistant':
-            conversation_turns.append(ConversationTurn(
-                question=content,
-                answer="",
-                timestamp=timestamp,
-                role="assistant"
-            ))
-        else:
-            conversation_turns.append(ConversationTurn(
-                question="",
-                answer=content,
-                timestamp=timestamp,
-                role="user"
-            ))
-            
-    return TransformedChatMessagesResponse(
-        id=chat_id,
-        session_uuid=chat_id,
-        messages=conversation_turns
-    )
-
-
 @app.post("/api/chats/{chat_id}/messages", response_model=MessageSuccessResponse, responses={401: {"model": ErrorResponse}, 400: {"model": ErrorResponse}, 404: {"model": ErrorResponse}, 500: {"model": ErrorResponse}})
 async def post_message(
     chat_id: str,
     message_data: SendMessageRequest,
     request: Request,
-    # current_user_id: str = Depends(get_current_user_id), # AUTH BYPASS: Commented out dependency
+    # current_user_id: str = Depends(get_current_user_id),  # AUTH BYPASS
 ):
-    # AUTH BYPASS: Define a temporary user ID
     current_user_id = "test_user_for_bypass"
 
     users_collection_dep = request.app.state.users_collection
@@ -525,23 +393,17 @@ async def post_message(
     messages_collection_dep = request.app.state.messages_collection
     openai_client_dep = request.app.state.openai_client
 
-    # AUTH BYPASS: Changed query to potentially remove participant check for easier testing
-    # Original: chat = chats_collection_dep.find_one({"_id": ObjectId(chat_id), "participants": current_user_id})
-    chat = chats_collection_dep.find_one({"_id": ObjectId(chat_id)}) # Simpler for bypass
+    chat = chats_collection_dep.find_one({"_id": ObjectId(chat_id)})
     if not chat:
         raise HTTPException(status_code=404, detail="Chat not found")
 
     if not message_data.content:
         raise HTTPException(status_code=400, detail="Message content is required")
-    
-    # AUTH BYPASS: user_info is no longer needed since current_user_id is hardcoded
-    # user_info = users_collection_dep.find_one({"_id": ObjectId(current_user_id)})
-    # user_sender_name = user_info.get("firstName", "User") if user_info else "User"
 
     user_message_instance = llm_store_message(
         messages_collection=messages_collection_dep,
         chat_id=chat_id,
-        user_id=current_user_id, # Use the dummy user ID
+        user_id=current_user_id,
         content=message_data.content,
         sender="user"
     )
@@ -558,7 +420,7 @@ async def post_message(
         bot_response_content = await ask_openai(
             user_message_content=message_data.content,
             chat_id=chat_id,
-            user_id=current_user_id, # Pass the dummy user ID to ask_openai if it uses it
+            user_id=current_user_id,
             openai_client=openai_client_dep,
             messages_collection=messages_collection_dep,
         )
@@ -567,7 +429,7 @@ async def post_message(
         import traceback
         traceback.print_exc()
         bot_response_content = "I'm having trouble responding right now. Please try again later."
-    
+
     bot_message_instance = llm_store_message(
         messages_collection=messages_collection_dep,
         chat_id=chat_id,
@@ -584,6 +446,7 @@ async def post_message(
             "lastActivity": datetime.now(UTC)
         }}
     )
+
     return MessageSuccessResponse(
         success=True,
         message=ConversationTurn(
@@ -593,26 +456,69 @@ async def post_message(
             role="assistant"
         )
     )
+@app.get("/api/chats/{chat_id}/messages", response_model=TransformedChatMessagesResponse, responses={401: {"model": ErrorResponse}, 404: {"model": ErrorResponse}, 500: {"model": ErrorResponse}})
+async def get_chat_messages(
+    chat_id: str,
+    request: Request,
+    # current_user_id: str = Depends(get_current_user_id),  # AUTH BYPASS
+):
+    current_user_id = "test_user_for_bypass"
 
+    chats_collection_dep = request.app.state.chats_collection
+    messages_collection_dep = request.app.state.messages_collection
 
-# --- Initialize Chat Session (for unauthenticated or initial frontend load) ---
-# This endpoint already handles unauthenticated sessions and doesn't rely on get_current_user_id.
+    chat = chats_collection_dep.find_one({"_id": ObjectId(chat_id)})
+    if not chat:
+        raise HTTPException(status_code=404, detail="Chat not found")
+
+    messages_raw = list(messages_collection_dep.find(
+        {"chatId": chat_id},
+        {"_id": 1, "chatId": 1, "userId": 1, "content": 1, "timestamp": 1, "sender": 1}
+    ).sort("timestamp", 1))
+
+    conversation_turns: List[ConversationTurn] = []
+
+    for msg in messages_raw:
+        sender_id = str(msg['userId'])
+        content = msg['content']
+        timestamp = msg.get('timestamp', datetime.now(UTC))
+        sender_role_actual = 'assistant' if sender_id == BOT_USER_ID else 'user'
+
+        if sender_role_actual == 'assistant':
+            conversation_turns.append(ConversationTurn(
+                question=content,
+                answer="",
+                timestamp=timestamp,
+                role="assistant"
+            ))
+        else:
+            conversation_turns.append(ConversationTurn(
+                question="",
+                answer=content,
+                timestamp=timestamp,
+                role="user"
+            ))
+
+    return TransformedChatMessagesResponse(
+        id=chat_id,
+        session_uuid=chat_id,
+        messages=conversation_turns
+    )
 @app.get("/api/chat/init", response_model=MessagesListResponse, responses={500: {"model": ErrorResponse}})
 async def initialize_chat_session(request: Request):
     messages_collection_dep = request.app.state.messages_collection
     chats_collection_dep = request.app.state.chats_collection
 
     session_uuid = request.session.get("chat_uuid")
-    
     initial_ai_question = "What is the name or model of the product?"
     first_bot_message_content = f"Hello! {initial_ai_question}"
 
-    current_user_id = "temp_user_id_for_init" # Important for unauthenticated sessions handled by this route
+    current_user_id = "temp_user_id_for_init"
 
     if not session_uuid:
         session_uuid = str(ObjectId())
         request.session["chat_uuid"] = session_uuid
-        
+
         llm_store_message(
             messages_collection=messages_collection_dep,
             chat_id=session_uuid,
@@ -620,6 +526,7 @@ async def initialize_chat_session(request: Request):
             content=first_bot_message_content,
             sender=BOT_SENDER_NAME
         )
+
         chats_collection_dep.insert_one({
             "_id": ObjectId(session_uuid),
             "participants": [BOT_USER_ID, current_user_id],
@@ -628,43 +535,14 @@ async def initialize_chat_session(request: Request):
             "lastActivity": datetime.now(UTC),
             "lastMessage": first_bot_message_content
         })
-        qa_log_raw = messages_collection_dep.find({"chatId": session_uuid}).sort("timestamp", 1)
-        qa_log = [MessageModel(**{**msg, 'id': str(msg['_id'])}) for msg in qa_log_raw]
-    else:
-        qa_log_raw = messages_collection_dep.find({"chatId": session_uuid}).sort("timestamp", 1)
-        qa_log = [MessageModel(**{**msg, 'id': str(msg['_id'])}) for msg in qa_log_raw]
 
-        if not qa_log:
-            session_uuid = str(ObjectId())
-            request.session["chat_uuid"] = session_uuid
-            llm_store_message(
-                messages_collection=messages_collection_dep,
-                chat_id=session_uuid,
-                user_id=BOT_USER_ID,
-                content=first_bot_message_content,
-                sender=BOT_SENDER_NAME
-            )
-            chats_collection_dep.insert_one({
-                "_id": ObjectId(session_uuid),
-                "participants": [BOT_USER_ID, current_user_id],
-                "title": "Initial Chat",
-                "createdAt": datetime.now(UTC),
-                "lastActivity": datetime.now(UTC),
-                "lastMessage": first_bot_message_content
-            })
-            qa_log_raw = messages_collection_dep.find({"chatId": session_uuid}).sort("timestamp", 1)
-            qa_log = [MessageModel(**{**msg, 'id': str(msg['_id'])}) for msg in qa_log_raw]
+    qa_log_raw = messages_collection_dep.find({"chatId": session_uuid}).sort("timestamp", 1)
+    qa_log = [MessageModel(**{**msg, 'id': str(msg['_id'])}) for msg in qa_log_raw]
 
     return MessagesListResponse(messages=qa_log)
-
-
 @app.post("/api/trigger_search_pipeline", response_model=SuccessMessageResponse, responses={500: {"model": ErrorResponse}})
 async def trigger_search_pipeline_api(request: Request):
-    """
-    API endpoint to trigger the backend search pipeline.
-    This replaces the logic from the old HTML-serving '/complete' route.
-    """
-    from back_end_llm import run_search_pipeline  # Import inside to avoid circular imports
+    from back_end_llm import run_search_pipeline  # Avoid circular import
 
     session_uuid = request.session.get("chat_uuid")
     if not session_uuid:
@@ -685,3 +563,4 @@ async def trigger_search_pipeline_api(request: Request):
     asyncio.create_task(run_module2_background_task(session_uuid))
 
     return SuccessMessageResponse(message="Search pipeline started in the background.")
+

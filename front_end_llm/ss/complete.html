@@ -5,22 +5,33 @@
     <link rel="stylesheet" href="/static/style.css">
 </head>
 <body>
-    <h2>Final Q&A</h2>
+    <div class="container">
+        <h2>Final Q&A</h2>
 
-    {% for item in qa_log %}
-        {% if item.role == "assistant" %}
-            <div class="qa-block">
-                <div class="question">Q: {{ item.question }}</div>
-        {% elif item.role == "user" %}
-                <div class="answer">A: {{ item.answer }}</div>
-            </div>
+        {% for item in qa_log %}
+            {% if item.role == "assistant" %}
+                <div class="qa-block">
+                    <div class="question">Q: {{ item.question }}</div>
+                </div>
+            {% elif item.role == "user" %}
+                <div class="qa-block">
+                    <div class="answer">A: {{ item.answer }}</div>
+                </div>
+            {% endif %}
+        {% endfor %}
+
+        <p>✅ Thank you! Your product has been analyzed.</p>
+
+        {% if search_started %}
+            <p style="color: green; font-weight: bold;">
+                🔍 Company search started. Results will be available shortly...
+            </p>
         {% endif %}
-    {% endfor %}
 
-    <p>Thank you! Your product has been analyzed.</p>
-
-    {% if search_started %}
-        <p style="color: green; font-weight: bold;">🔍 Company search started. Results will be available shortly...</p>
-    {% endif %}
+        <div style="margin-top: 2rem;">
+            <a href="/new-chat" class="button">🆕 New Chat</a>
+            <a href="/logout" class="button logout">🚪 Logout</a>
+        </div>
+    </div>
 </body>
 </html>

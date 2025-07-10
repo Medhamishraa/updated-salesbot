@@ -10,7 +10,7 @@ from front_end_llm.pydantic_models import AskInput, Message
 from front_end_llm.prompts import SYSTEM_PROMPT, RETRY_PROMPT_SUFFIX, NEXT_QUESTION_PROMPT # NEXT_QUESTION_PROMPT is here
 
 # Import LLM-specific utilities
-from front_end_llm.utils import is_forbidden, is_duplicate, get_chat_messages, get_qa_history_for_llm
+from front_end_llm.shared import is_forbidden, is_duplicate, get_chat_messages, get_qa_history_for_llm
 
 def _generate_response_from_llm(
     openai_client: OpenAI,

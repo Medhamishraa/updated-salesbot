@@ -13,30 +13,45 @@ load_dotenv()
 OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
 GOOGLE_PLACES_API_KEY = os.getenv("GOOGLE_PLACES_API_KEY")
 MONGODB_URL = os.getenv("MONGODB_URL")
-MONGO_DB_NAME = os.getenv("MONGO_DB_NAME")
-MONGO_COLLECTION_NAME = os.getenv("MONGO_COLLECTION_NAME")
+WRITE_MONGO_DB_NAME = os.getenv("WRITE_MONGO_DB_NAME")
+WRITE_MONGO_COLLECTION_NAME = os.getenv("WRITE_MONGO_COLLECTION_NAME")
+READ_MONGO_DB = os.getenv("READ_MONGO_DB")
+READ_MONGO_COLLECTION = os.getenv("READ_MONGO_COLLECTION")
+
+# session_id="f517198d-4b6d-43ca-95cb-86ab6e2e32a8"
+# user_id="ce537259-47b9-4fc4-89e5-a53bbabf51f1"
+# chat_id="d49bceb6-d6f1-4846-b6e7-082d6944df16"
 
 # ------------------ MongoDB Utilities ------------------
 def get_mongo_collection() -> Collection:
     client = MongoClient(MONGODB_URL)
-    db = client[MONGO_DB_NAME]
-    return db[MONGO_COLLECTION_NAME]
+    db = client[WRITE_MONGO_DB_NAME]
+    return db[WRITE_MONGO_COLLECTION_NAME]
 
 def get_mongo_client():
     return MongoClient(MONGODB_URL)
 
-def fetch_latest_session_from_mongo() -> Optional[List[ConversationEntry]]:
-    client = get_mongo_client()
-    db = client["chatbot_db"]  # explicitly use the correct DB
-    collection = db["chat_sessions"]  # explicitly use the correct collection
+def get_read_collection():
+    client = MongoClient(MONGODB_URL)
+    return client[READ_MONGO_DB][READ_MONGO_COLLECTION]
 
-    latest_session = collection.find_one(sort=[("_id", -1)])
-    if not latest_session or "messages" not in latest_session:
+def get_write_collection():
+    client = MongoClient(MONGODB_URL)
+    return client[WRITE_MONGO_DB_NAME][WRITE_MONGO_COLLECTION_NAME]
+
+def fetch_latest_session_from_mongo(session_uuid: str, user_id: str, chat_id: str) -> Optional[List[ConversationEntry]]:
+    collection = get_read_collection()  # ✅ Use read DB
+
+    session = collection.find_one({"session_uuid": session_uuid, "userId": user_id})
+    if not session:
+        logging.warning(f"No session found for session_uuid={session_uuid}, userId={user_id}")
         return None
 
-    messages = latest_session["messages"]
-    qa_pairs = []
+    chats = session.get("chats", {})
+    chat_data = chats.get(chat_id, {})
+    messages = chat_data.get("messages", [])
 
+    qa_pairs = []
     for i in range(0, len(messages) - 1):
         current = messages[i]
         next_msg = messages[i + 1]
@@ -47,6 +62,10 @@ def fetch_latest_session_from_mongo() -> Optional[List[ConversationEntry]]:
             ))
 
     return qa_pairs if qa_pairs else None
+
+
+
+
 
 # ------------------ ChatML Utility ------------------
 def json_to_chatml(conversation_log) -> str:

@@ -10,19 +10,24 @@
   <div class="container">
     <h1>Customer Discovery Bot</h1>
 
+    <div style="margin-bottom: 1rem;">
+      <a href="/new-chat" class="button">🆕 New Chat</a>
+      <a href="/logout" class="button" style="background-color: #e74c3c; color: white;">🚪 Logout</a>
+    </div>
+
     <div class="current-question">
       <div class="question">🤖 {{ question }}</div>
     </div>
 
     <form method="POST" class="input-form">
-        <label for="answer">Your Answer:</label>
-        <input type="text" name="answer" id="answer" placeholder="Type your answer here..." autocomplete="off" />
-        
-        <button type="submit" name="end_conversation" value="false">Submit</button>
-        <button type="submit" name="end_conversation" value="true" style="background-color: #e74c3c; color: white;">
-          End Conversation
-        </button>
-      </form>
+      <label for="answer">Your Answer:</label>
+      <input type="text" name="answer" id="answer" placeholder="Type your answer here..." autocomplete="off" />
+
+      <button type="submit" name="end_conversation" value="false">Submit</button>
+      <button type="submit" name="end_conversation" value="true" style="background-color: #e74c3c; color: white;">
+        End Conversation
+      </button>
+    </form>
 
     <div class="history" style="margin-top: 2rem;">
       {% for item in qa_log %}

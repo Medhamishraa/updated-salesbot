@@ -1,4 +1,5 @@
 import logging
+from uuid import uuid4
 from back_end_llm.prompts import get_application_extraction_prompt, get_google_search_prompt
 from back_end_llm.utils import (
     fetch_latest_session_from_mongo,
@@ -6,16 +7,17 @@ from back_end_llm.utils import (
     extract_user_location,
     get_lat_lng_from_location,
     search_google_places,
-    get_mongo_collection
+    get_mongo_collection, get_write_collection
 )
 from back_end_llm.pydantic_models import (
     ConversationLog, PredictionResult, SearchQueryEntry, SearchQueryResults, Place, SearchTerms
 )
 from pydantic_ai import Agent
+from datetime import datetime
 
 
-def main():
-    conversation_entries = fetch_latest_session_from_mongo()
+def main(user_id: str, session_uuid: str, chat_id: str):
+    conversation_entries = fetch_latest_session_from_mongo(session_uuid, user_id, chat_id)
     if not conversation_entries:
         print("No valid session or QA items found.")
         return
@@ -32,18 +34,16 @@ def main():
 
     result = agent.run_sync(get_application_extraction_prompt(chatml_conversation), output_type=PredictionResult)
     applications = result.output.predicted_interests
-    # print(applications)
+
     search_results = []
     for app in applications:
         search_terms = []
         PROMPT = get_google_search_prompt(app)
         try:
             search_result = agent.run_sync(PROMPT, output_type=SearchTerms)
-            # print(SearchTerms)
             search_terms = search_result.output.search_terms
         except Exception as e:
             logging.error("Search term generation failed for '%s': %s", app, str(e))
-
 
         all_places = []
         final_status = "ZERO_RESULTS"
@@ -77,12 +77,26 @@ def main():
     with open('output.json', 'w', encoding='utf-8') as f:
         f.write(final_output.model_dump_json(indent=2))
 
-    print("📝 Results saved to: output.json")
+    print(" Results saved to: output.json")
 
-    # Insert into MongoDB
-    collection = get_mongo_collection()
-    for entry in final_output.targeting_keywords:
-        doc = {
+    # -----------------  MongoDB Storage ------------------
+
+    # Dummy session + user IDs (replace with real ones if needed)
+        # -----------------  MongoDB Storage with Provided Chat ID ------------------
+
+
+    # Prepare messages from conversation
+    messages = [
+        {
+            "question": entry.question,
+            "answer": entry.answer
+        }
+        for entry in conversation_entries
+    ]
+
+    # Format the output for this chat
+    output_data = [
+        {
             "application": entry.application,
             "search_terms": entry.google_search_terms,
             "companies": [
@@ -106,14 +120,26 @@ def main():
                 } for p in entry.matched_places
             ]
         }
+        for entry in final_output.targeting_keywords
+    ]
 
-        collection.update_one(
-            {"application": entry.application},
-            {"$set": doc},
-            upsert=True
-        )
+    # Compose and upsert the full document with this chat_id
 
-    print(" Data successfully inserted/updated into MongoDB Atlas.")
+    collection = get_write_collection()
+
+    collection.update_one(
+        {"session_uuid": session_uuid, "userId": user_id},
+        {
+            "$set": {
+                f"chats.{chat_id}.output": output_data
+            }
+        },
+        upsert=True
+    )
 
 
+    print(f" Chat data inserted under chat ID '{chat_id}' in MongoDB.")
+
+if __name__ == "__main__":
+    main()
 
